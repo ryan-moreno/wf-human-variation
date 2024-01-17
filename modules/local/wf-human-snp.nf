@@ -682,7 +682,7 @@ process vcfStats {
 
 process makeReport {
     cpus 1
-    memory 16.GB
+    memory 24.GB
     input:
         file vcfstats
         path versions

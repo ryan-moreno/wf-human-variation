@@ -67,7 +67,7 @@ process getParams {
 
 process makeReport {
     cpus 1
-    memory 12.GB
+    memory 24.GB
     input:
         path(read_stats)
         tuple path(cnv_calls), val(cnv_files), path(noise_plot), path(isobar_plot)
