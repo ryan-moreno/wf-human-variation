@@ -4,6 +4,7 @@ import groovy.json.JsonBuilder
 process filterBam {
     label "wf_human_sv"
     cpus params.threads
+    memory 4.GB
     input:
         tuple path(xam), path(xam_idx)
         tuple path(ref), path(ref_idx), path(ref_cache), env(REF_PATH)
@@ -22,6 +23,7 @@ process filterBam {
 process sniffles2 {
     label "wf_human_sv"
     cpus params.threads
+    memory 6.GB
     input:
         tuple path(xam), path(xam_idx)
         file tr_bed
@@ -32,7 +34,8 @@ process sniffles2 {
         def tr_arg = tr_bed.name != 'OPTIONAL_FILE' ? "--tandem-repeats ${tr_bed}" : ''
         def sniffles_args = params.sniffles_args ?: ''
         def min_sv_len = params.min_sv_length ? "--minsvlen ${params.min_sv_length}" : ""
-        def phase = params.phase_vcf ? "--phase" : ""
+        // Perform internal phasing only if snp not requested; otherwise, use joint phasing.
+        def phase = params.phased && (!params.snp || params.output_separate_phased) ? "--phase" : ""
     """
     sniffles \
         --threads $task.cpus \
@@ -52,7 +55,8 @@ process sniffles2 {
 
 
 process filterCalls {
-    cpus 1
+    cpus { params.threads < 2 ? 2 : params.threads }
+    memory 4.GB
     input:
         file vcf
         path mosdepth_summary // MOSDEPTH_TUPLE
@@ -62,6 +66,7 @@ process filterCalls {
     script:
     """
     get_filter_calls_command.py \
+        --bcftools_threads $task.cpus \
         --target_bedfile $target_bed \
         --vcf $vcf \
         --depth_summary $mosdepth_summary \
@@ -77,7 +82,8 @@ process filterCalls {
 //  we'll rename it with its desired output name here
 process sortVCF {
     label "wf_human_sv"
-    cpus 1
+    cpus 2
+    memory 4.GB
     input:
         file vcf
     output:
@@ -127,6 +133,7 @@ process getParams {
 
 process report {
     cpus 1
+    memory 6.GB
     input:
         file vcf
         file eval_json

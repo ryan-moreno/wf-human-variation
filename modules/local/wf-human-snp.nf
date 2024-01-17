@@ -1,5 +1,6 @@
 import groovy.json.JsonBuilder
 
+def phaser_memory = params.use_longphase ? [8.GB, 32.GB, 56.GB] : [4.GB, 8.GB, 12.GB]
 
 process make_chunks {
     // Do some preliminaries. Ordinarily this would setup a working directory
@@ -7,6 +8,7 @@ process make_chunks {
     // list of contigs and chunks.
     label "wf_human_snp"
     cpus 1
+    memory 4.GB
     input:
         tuple path(xam), path(xam_idx)
         tuple path(ref), path(ref_idx), path(ref_cache), env(REF_PATH)
@@ -52,7 +54,9 @@ process pileup_variants {
     // Calls variants per region ("chunk") using pileup network.
     label "wf_human_snp"
     cpus 1
+    memory { 4.GB * task.attempt }
     errorStrategy 'retry'
+    maxRetries 1
     input:
         each region
         tuple path(xam), path(xam_idx)
@@ -101,6 +105,7 @@ process aggregate_pileup_variants {
     // to use for phasing.
     label "wf_human_snp"
     cpus 2
+    memory 4.GB
     input:
         tuple path(ref), path(ref_idx), path(ref_cache), env(REF_PATH)
         // these need to be named as original, as program uses info from
@@ -136,6 +141,7 @@ process select_het_snps {
     // Filters a VCF by contig, selecting only het SNPs.
     label "wf_human_snp"
     cpus 2
+    memory 4.GB
     input:
         each contig
         tuple path("pileup.vcf.gz"), path("pileup.vcf.gz.tbi")
@@ -161,6 +167,11 @@ process phase_contig_haplotag {
     // Also haplotag for those modes that need it (--str)
 
     cpus 4
+    // Define memory from phasing tool and number of attempt
+    memory { phaser_memory[task.attempt - 1] }
+    maxRetries 3
+    errorStrategy = {task.exitStatus in [137,140] ? 'retry' : 'finish'}
+
     input:
         tuple val(contig), 
             path(het_snps), path(het_snps_tbi), 
@@ -169,7 +180,7 @@ process phase_contig_haplotag {
     output:
         tuple val(contig), path("${contig}_hp.bam"), path("${contig}_hp.bam.bai"), path("phased_${contig}.vcf.gz"), emit: phased_bam_and_vcf
     script:
-    if (params.use_longphase_intermediate)
+    if (params.use_longphase)
         """
         # REF_PATH points to the reference cache and allows faster parsing of CRAM files
         longphase phase --ont -o phased_${contig} \
@@ -222,12 +233,16 @@ process phase_contig {
     //   but adds the VCF as it is now tagged with phasing information
     //   used later in the full-alignment model
     cpus 4
+    memory { phaser_memory[task.attempt - 1] }
+    maxRetries 3
+    errorStrategy = {task.exitStatus in [137,140] ? 'retry' : 'finish'}
+
     input:
         tuple val(contig), path(het_snps), path(het_snps_tbi), path(xam), path(xam_idx), path(ref), path(ref_idx), path(ref_cache), env(REF_PATH)
     output:
         tuple val(contig), path(xam), path(xam_idx), path("phased_${contig}.vcf.gz"), emit: phased_bam_and_vcf
     script:
-        if (params.use_longphase_intermediate)
+        if (params.use_longphase)
         """
         echo "Using longphase for phasing"
         longphase phase --ont -o phased_${contig} \
@@ -252,8 +267,9 @@ process phase_contig {
 }
 
 process merge_haplotagged_contigs {
-    cpus params.threads
     label "wf_human_snp"
+    cpus params.merge_threads
+    memory 4.GB
     input:
         path contig_xams
         tuple path(ref), path(ref_idx), path(ref_cache), env(REF_PATH)
@@ -272,6 +288,7 @@ process get_qual_filter {
     // stage "full alignment" calling.
     label "wf_human_snp"
     cpus 2
+    memory 4.GB
     input:
         tuple path("pileup.vcf.gz"), path("pileup.vcf.gz.tbi")
     output:
@@ -297,6 +314,7 @@ process create_candidates {
     // Performed per chromosome; output a list of bed files one for each chunk.
     label "wf_human_snp"
     cpus 2
+    memory 4.GB
     input:
         each contig
         tuple path(ref), path(ref_idx), path(ref_cache), env(REF_PATH)
@@ -333,7 +351,10 @@ process evaluate_candidates {
     // phased_bam just references the input BAM as it no longer contains phase information.
     label "wf_human_snp"
     cpus 1
-    errorStrategy 'retry'
+    memory { 8.GB * task.attempt }
+    maxRetries 2
+    errorStrategy = {task.exitStatus in [137,140] ? 'retry' : 'finish'}
+
     input:
         tuple val(contig), path(phased_xam), path(phased_xam_idx), path(phased_vcf)
         tuple val(contig), path(candidate_bed)
@@ -372,6 +393,10 @@ process aggregate_full_align_variants {
     // Sort and merge all "full alignment" variants
     label "wf_human_snp"
     cpus 2
+    memory { 4.GB * task.attempt }
+    maxRetries 2
+    errorStrategy = {task.exitStatus in [137,140] ? 'retry' : 'finish'}
+
     input:
         tuple path(ref), path(ref_idx), path(ref_cache), env(REF_PATH)
         path "full_alignment/*"
@@ -415,6 +440,7 @@ process merge_pileup_and_full_vars{
     // Merge VCFs
     label "wf_human_snp"
     cpus 2
+    memory 4.GB
     input:
         each contig
         tuple path(ref), path(ref_idx), path(ref_cache), env(REF_PATH)
@@ -454,6 +480,11 @@ process post_clair_phase_contig {
     // Phase VCF for a contig
     // CW-2383: now uses base image to allow phasing of both snps and indels
     cpus 4
+    // Define memory from phasing tool and number of attempt
+    memory { phaser_memory[task.attempt - 1] }
+    maxRetries 3
+    errorStrategy = {task.exitStatus in [137,140] ? 'retry' : 'finish'}
+
     input:
         tuple val(contig), path(vcf), path(vcf_tbi), path(xam), path(xam_idx), path(ref), path(ref_idx), path(ref_cache), env(REF_PATH)
     output:
@@ -487,6 +518,10 @@ process post_clair_phase_contig {
 process aggregate_all_variants{
     label "wf_human_snp"
     cpus 4
+    memory { 8.GB * task.attempt }
+    maxRetries 2
+    errorStrategy = {task.exitStatus in [137,140] ? 'retry' : 'finish'}
+
     input:
         tuple path(ref), path(ref_idx), path(ref_cache), env(REF_PATH)
         path "merge_output/*"
@@ -497,55 +532,55 @@ process aggregate_all_variants{
     output:
         tuple path("${params.sample_name}.wf_snp.vcf.gz"), path("${params.sample_name}.wf_snp.vcf.gz.tbi"), emit: final_vcf
         tuple path("${params.sample_name}.wf_snp.gvcf.gz"), path("${params.sample_name}.wf_snp.gvcf.gz.tbi"), emit: final_gvcf, optional: true
-    shell:
-        '''
-        prefix="merge"
-        phase_vcf=!{params.phase_vcf}
-        if [[ $phase_vcf == "true" ]]; then
-            prefix="phased"
-        fi
+    script:
+        def prefix = params.phased ? "phased" : "merge" 
+        """
         ls merge_output/*.vcf.gz | parallel --jobs 4 "bgzip -d {}"
 
-        pypy $(which clair3.py) SortVcf \
+        pypy \$(which clair3.py) SortVcf \
             --input_dir merge_output \
             --vcf_fn_prefix $prefix \
-            --output_fn !{params.sample_name}.wf_snp.vcf \
-            --sampleName !{params.sample_name} \
-            --ref_fn !{ref} \
-            --cmd_fn !{command} \
-            --contigs_fn !{contigs}
+            --output_fn ${params.sample_name}.wf_snp.vcf \
+            --sampleName ${params.sample_name} \
+            --ref_fn ${ref} \
+            --cmd_fn ${command} \
+            --contigs_fn ${contigs}
 
-        if [ "$( bgzip -fdc !{params.sample_name}.wf_snp.vcf.gz | grep -v '#' | wc -l )" -eq 0 ]; then
+        if [ "\$( bgzip -fdc ${params.sample_name}.wf_snp.vcf.gz | grep -v '#' | wc -l )" -eq 0 ]; then
             echo "[INFO] Exit in all contigs variant merging"
             exit 0
         fi
 
         # TODO: this could be a separate process
-        if [ "!{params.GVCF}" == "true" ]; then
-            pypy $(which clair3.py) SortVcf \
+        if [ "${params.GVCF}" == "true" ]; then
+            pypy \$(which clair3.py) SortVcf \
                 --input_dir merge_outputs_gvcf \
                 --vcf_fn_prefix merge \
                 --vcf_fn_suffix .gvcf \
                 --output_fn tmp.gvcf \
-                --sampleName !{params.sample_name} \
-                --ref_fn !{ref} \
-                --cmd_fn !{command} \
-                --contigs_fn !{contigs}
+                --sampleName ${params.sample_name} \
+                --ref_fn ${ref} \
+                --cmd_fn ${command} \
+                --contigs_fn ${contigs}
 
                 # Reheading samples named "SAMPLE" to params.sample_name. If no 
-                echo "SAMPLE" "!{params.sample_name}" > rename.txt
-                bcftools reheader -s rename.txt tmp.gvcf.gz > !{params.sample_name}.wf_snp.gvcf.gz
-                bcftools index -t !{params.sample_name}.wf_snp.gvcf.gz && rm tmp.gvcf.gz rename.txt
+                echo "SAMPLE" "${params.sample_name}" > rename.txt
+                bcftools reheader -s rename.txt tmp.gvcf.gz > ${params.sample_name}.wf_snp.gvcf.gz
+                bcftools index -t ${params.sample_name}.wf_snp.gvcf.gz && rm tmp.gvcf.gz rename.txt
         fi
 
         echo "[INFO] Finish calling, output file: merge_output.vcf.gz"
-        '''
+        """
 }
 
 
 process refine_with_sv {
     label "wf_human_snp"
     cpus 1
+    memory { 8.GB * task.attempt }
+    maxRetries 2
+    errorStrategy = {task.exitStatus in [137,140] ? 'retry' : 'finish'}
+
     input:
         tuple path(ref), path(ref_idx), path(ref_cache), env(REF_PATH) 
         tuple path(clair_vcf, stageAs: 'clair.vcf.gz'), path(clair_tbi, stageAs: 'clair.vcf.gz.tbi')
@@ -634,18 +669,20 @@ process getParams {
 
 process vcfStats {
     label "wf_human_snp"
-    cpus 1
+    cpus 2
     input:
         tuple path(vcf), path(index)
     output:
         file "variants.stats"
     """
-    bcftools stats $vcf > variants.stats
+    bcftools stats --threads ${task.cpus - 1} $vcf > variants.stats
     """
 }
 
 
 process makeReport {
+    cpus 1
+    memory 16.GB
     input:
         file vcfstats
         path versions
