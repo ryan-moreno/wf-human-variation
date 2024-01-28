@@ -56,7 +56,7 @@ process sniffles2 {
 
 process filterCalls {
     cpus { params.threads < 2 ? 2 : params.threads }
-    memory 4.GB
+    memory 32.GB
     input:
         file vcf
         path mosdepth_summary // MOSDEPTH_TUPLE
